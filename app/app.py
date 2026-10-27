@@ -42,8 +42,15 @@ LDAP_PORT = int(os.environ.get("PB_LDAP_PORT", "389"))
 BASE_DN = os.environ.get("PB_BASE_DN", "dc=pbx,dc=office")
 PEOPLE_DN = os.environ.get("PB_PEOPLE_DN", f"ou=people,{BASE_DN}")
 BIND_PATTERN = os.environ.get("PB_BIND_PATTERN", f"cn=%s,{BASE_DN}")
-NUMBER_ATTRS = ("telephoneNumber", "mobile", "homePhone")
-READ_ATTRS = ["uid", "cn", "sn", "title", "o", *NUMBER_ATTRS]
+# One number per attribute. Fanvil (and Yealink) render each attribute as its own
+# field and cannot show several values of telephoneNumber, so the three slots are
+# kept single-valued: telephoneNumber / mobile / homePhone.
+NUMBER_FIELDS = (("work", "telephoneNumber"),
+                 ("mobile", "mobile"),
+                 ("other", "homePhone"))
+NUMBER_LABELS = {"work": "Рабочий", "mobile": "Мобильный", "other": "Другой"}
+NUMERIC_ATTRS = tuple(attr for _key, attr in NUMBER_FIELDS)
+READ_ATTRS = ["uid", "cn", "sn", "title", "o", *NUMERIC_ATTRS]
 SESSION_TTL = int(os.environ.get("PB_SESSION_TTL", str(12 * 3600)))
 COOKIE = "pb_sid"
 TITLE = os.environ.get("PB_TITLE", "Телефонная книга")
@@ -134,6 +141,27 @@ def connect(user: str, password: str) -> Connection | None:
         return None
 
 
+def entry_numbers(clean: dict[str, list[str]]) -> dict[str, str]:
+    """Map the three attributes onto the three form fields.
+
+    Older records may still carry several values of telephoneNumber; the extra
+    ones are moved into free mobile/other slots so that nothing is lost when the
+    record is saved again (the phone shows a single value per attribute).
+    """
+    values: dict[str, list[str]] = {}
+    for key, attr in NUMBER_FIELDS:
+        values[key] = [v for v in clean.get(attr, []) if v]
+    slots = ["work", "mobile", "other"]
+    extra = values["work"][1:]
+    values["work"] = values["work"][:1]
+    for key in ("mobile", "other"):
+        if not values[key] and extra:
+            values[key] = [extra.pop(0)]
+    out = {key: (values[key][0] if values[key] else "") for key in slots}
+    out["_extra"] = extra  # leftovers that had nowhere to go (rare)
+    return out
+
+
 def fetch(conn: Connection) -> list[dict]:
     conn.search(PEOPLE_DN, "(objectClass=inetOrgPerson)", attributes=READ_ATTRS,
                 size_limit=0, paged_size=500)
@@ -141,16 +169,16 @@ def fetch(conn: Connection) -> list[dict]:
     for entry in conn.entries:
         attrs = entry.entry_attributes_as_dict
         clean = {k: [str(v) for v in vals] for k, vals in attrs.items()}
-        numbers: list[str] = []
-        for attr in NUMBER_ATTRS:
-            for value in clean.get(attr, []):
-                if value not in numbers:
-                    numbers.append(value)
+        slots = entry_numbers(clean)
+        numbers = [slots[key] for key in ("work", "mobile", "other") if slots[key]]
         people.append({
             "uid": (clean.get("uid") or [""])[0],
             "fio": (clean.get("cn") or [""])[0],
             "title": (clean.get("title") or [""])[0],
             "company": (clean.get("o") or [""])[0],
+            "work": slots["work"],
+            "mobile": slots["mobile"],
+            "other": slots["other"],
             "numbers": numbers,
         })
     people.sort(key=lambda p: (p["company"].casefold(), p["fio"].casefold()))
@@ -183,14 +211,15 @@ def add_person(conn: Connection, fio: str, company: str, title: str,
         attrs["o"] = company
     if title:
         attrs["title"] = title
-    if numbers:
-        attrs["telephoneNumber"] = numbers
+    for key, attr in NUMBER_FIELDS:
+        if numbers.get(key):
+            attrs[attr] = numbers[key]
     ok = conn.add(f"uid={uid},{PEOPLE_DN}", ["inetOrgPerson"], attrs)
     return ok, conn.result.get("description", "")
 
 
 def update_person(conn: Connection, uid: str, fio: str, company: str,
-                  title: str, numbers: list[str]) -> tuple[bool, str]:
+                  title: str, numbers: dict[str, str]) -> tuple[bool, str]:
     dn = f"uid={uid},{PEOPLE_DN}"
     conn.search(dn, "(objectClass=*)", attributes=READ_ATTRS, size_limit=1)
     if not conn.entries:
@@ -215,15 +244,18 @@ def update_person(conn: Connection, uid: str, fio: str, company: str,
     put("o", company)
     put("title", title)
 
-    # deleting an attribute that does not exist aborts the whole modify,
-    # so drop legacy split numbers only when they are actually present
-    if numbers:
-        changes["telephoneNumber"] = [(MODIFY_REPLACE, numbers)]
+    # Exactly one value per attribute: the phones show a single number per field.
+    # Numbers that older records keep beyond the first one are preserved in
+    # telephoneNumber instead of being thrown away on save.
+    work = norm(numbers.get("work", ""))
+    legacy_extra = [v for v in current.get("telephoneNumber", [])[1:] if v]
+    if work or legacy_extra:
+        changes["telephoneNumber"] = [(MODIFY_REPLACE,
+                                       ([work] if work else []) + legacy_extra)]
     elif current.get("telephoneNumber"):
         changes["telephoneNumber"] = [(MODIFY_DELETE, [])]
-    for legacy in ("mobile", "homePhone"):
-        if current.get(legacy):
-            changes[legacy] = [(MODIFY_DELETE, [])]
+    for key in ("mobile", "other"):
+        put(dict(NUMBER_FIELDS)[key], norm(numbers.get(key, "")))
 
     if not changes:
         return True, "no changes"
@@ -243,9 +275,14 @@ HEADER_MAP = {
     "должность": "title", "title": "title", "position": "title",
     "фио": "fio", "ф.и.о.": "fio", "фио сотрудника": "fio", "name": "fio",
     "cn": "fio", "сотрудник": "fio",
-    "телефоны": "numbers", "телефон": "numbers", "номера": "numbers",
-    "номера телефонов": "numbers", "phones": "numbers", "phone": "numbers",
+    "телефоны": "numbers", "телефон": "work", "номера": "numbers",
+    "номера телефонов": "numbers", "phones": "numbers", "phone": "work",
     "numbers": "numbers", "телефонные номера": "numbers",
+    "рабочий": "work", "рабочий телефон": "work", "work": "work", "tel": "work",
+    "мобильный": "mobile", "мобильный телефон": "mobile", "mobile": "mobile",
+    "моб": "mobile", "mob": "mobile", "cell": "mobile",
+    "другой": "other", "другой номер": "other", "домашний": "other",
+    "other": "other", "home": "other", "homephone": "other",
 }
 
 
@@ -269,17 +306,26 @@ def parse_csv(text: str) -> list[dict]:
     rows = list(csv.DictReader(io.StringIO(text), delimiter=delim))
     out = []
     for row in rows:
-        item = {"company": "", "title": "", "fio": "", "numbers": []}
+        item: dict = {"company": "", "title": "", "fio": "",
+                      "work": "", "mobile": "", "other": "", "numbers": []}
         for key, value in row.items():
             field = HEADER_MAP.get((key or "").strip().lower())
             if not field:
                 continue
-            if field == "numbers":
-                item["numbers"] += parse_numbers(value or "")
+            if field in ("numbers", "work", "mobile", "other"):
+                # a multi-value column is distributed over the free slots
+                item["numbers"] += parse_numbers(value or "") if field == "numbers" else []
+                if field != "numbers":
+                    item[field] = (parse_numbers(value or "") or [""])[0]
             else:
                 item[field] = norm(value or "")
+        for value in item["numbers"]:            # legacy "телефоны" column
+            for slot in ("work", "mobile", "other"):
+                if not item[slot]:
+                    item[slot] = value
+                    break
         if item["fio"]:
-            item["numbers"] = list(dict.fromkeys(item["numbers"]))
+            item.pop("numbers", None)
             out.append(item)
     return out
 
@@ -291,14 +337,15 @@ def import_rows(conn: Connection, rows: list[dict]) -> tuple[int, int, int, list
     errors: list[str] = []
     for row in rows:
         existing = current.get(row["fio"].casefold())
+        numbers = {key: row.get(key, "") for key, _attr in NUMBER_FIELDS}
         try:
             if existing:
                 ok, msg = update_person(conn, existing["uid"], row["fio"],
-                                        row["company"], row["title"], row["numbers"])
+                                        row["company"], row["title"], numbers)
                 updated += 1 if ok else 0
             else:
                 ok, msg = add_person(conn, row["fio"], row["company"],
-                                     row["title"], row["numbers"])
+                                     row["title"], numbers)
                 added += 1 if ok else 0
             if not ok:
                 failed += 1
@@ -464,6 +511,7 @@ form.inline { display: inline; }
 .filebox .filename { display: block; margin-top: 6px; font-size: 13px; color: #344054; }
 .panel h2 { margin: 0 0 20px; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .field { margin-bottom: 16px; }
 .field label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: #344054; }
 .field input, .field textarea {
@@ -506,7 +554,7 @@ form.inline { display: inline; }
 @media (max-width: 780px) {
   .topbar { padding: 0 16px; }
   main { padding: 18px 16px 48px; }
-  .grid2 { grid-template-columns: 1fr; }
+  .grid2, .grid3 { grid-template-columns: 1fr; }
   .userchip span { display: none; }
   .panel { padding: 20px; }
   .toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
@@ -607,14 +655,16 @@ def render_list(people: list[dict], user: str, message: str = "",
                 kind: str = "ok") -> bytes:
     rows = []
     for p in people:
-        numbers = "".join(f'<span class="chip">{esc(n)}</span>' for n in p["numbers"]) \
-            or '<span class="muted">—</span>'
+        chips = "".join(
+            f'<span class="chip" title="{esc(NUMBER_LABELS[key])}">{esc(p[key])}</span>'
+            for key in ("work", "mobile", "other") if p.get(key)
+        ) or '<span class="muted">—</span>'
         label = esc(" ".join([p['company'], p['title'], p['fio'], " ".join(p['numbers'])]).lower())
         rows.append(f"""<tr data-search="{label}">
 <td data-label="Предприятие">{esc(p['company']) or '<span class="muted">—</span>'}</td>
 <td data-label="Должность">{esc(p['title']) or '<span class="muted">—</span>'}</td>
 <td class="fio" data-label="ФИО">{esc(p['fio'])}</td>
-<td data-label="Телефоны"><div class="chips">{numbers}</div></td>
+<td data-label="Телефоны"><div class="chips">{chips}</div></td>
 <td class="actions">
   <a class="iconbtn" href="/edit?uid={quote(p['uid'])}" title="Изменить">{icon("pencil", 17)}</a>
   <form class="inline" method="post" action="/delete"
@@ -665,7 +715,8 @@ applyFilter();
 
 
 def render_form(person: dict | None, user: str, message: str = "") -> bytes:
-    p = person or {"uid": "", "fio": "", "company": "", "title": "", "numbers": []}
+    p = person or {"uid": "", "fio": "", "company": "", "title": "",
+                   "work": "", "mobile": "", "other": ""}
     heading = "Изменить запись" if p["uid"] else "Новая запись"
     banner = flash(message, "err") if message else ""
     body = f"""{banner}
@@ -681,10 +732,17 @@ def render_form(person: dict | None, user: str, message: str = "") -> bytes:
     </div>
     <div class="field"><label for="f">ФИО</label>
       <input id="f" type="text" name="fio" value="{esc(p['fio'])}" required></div>
-    <div class="field"><label for="n">Телефоны</label>
-      <textarea id="n" name="numbers"
-        placeholder="Каждый номер с новой строки">{esc(chr(10).join(p['numbers']))}</textarea>
-      <div class="hint">Можно несколько — по одному номеру на строку.</div></div>
+    <div class="grid3">
+      <div class="field"><label for="w">Рабочий</label>
+        <input id="w" type="text" name="work" value="{esc(p['work'])}"
+               placeholder="внутренний или городской"></div>
+      <div class="field"><label for="m">Мобильный</label>
+        <input id="m" type="text" name="mobile" value="{esc(p['mobile'])}"></div>
+      <div class="field"><label for="o">Другой</label>
+        <input id="o" type="text" name="other" value="{esc(p['other'])}"></div>
+    </div>
+    <div class="hint" style="margin:-6px 0 16px">По одному номеру в каждом поле:
+      телефоны показывают эти три значения как «Telephone», «Mobile», «Other».</div>
     <div class="formactions">
       <button class="btn primary" type="submit">{icon("check", 17)}Сохранить</button>
       <a class="btn ghost" href="/">Отмена</a>
@@ -735,9 +793,10 @@ document.getElementById('file').addEventListener('change', async (e) => {{
 def send_csv(people: list[dict]) -> bytes:
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
-    writer.writerow(["Предприятие", "Должность", "ФИО", "Телефоны"])
+    writer.writerow(["Предприятие", "Должность", "ФИО", "Телефон", "Мобильный", "Другой"])
     for p in people:
-        writer.writerow([p["company"], p["title"], p["fio"], ", ".join(p["numbers"])])
+        writer.writerow([p["company"], p["title"], p["fio"],
+                         p.get("work", ""), p.get("mobile", ""), p.get("other", "")])
     return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")  # BOM for Excel
 
 
@@ -893,7 +952,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 company = norm(data.get("company", ""))
                 title = norm(data.get("title", ""))
-                numbers = parse_numbers(data.get("numbers", ""))
+                # one number per field; the legacy "numbers" textarea is still
+                # accepted and distributed over the free slots
+                numbers = {key: norm(data.get(key, "")) for key, _attr in NUMBER_FIELDS}
+                if not any(numbers.values()):
+                    for slot, value in zip(("work", "mobile", "other"),
+                                           parse_numbers(data.get("numbers", ""))):
+                        numbers[slot] = value
                 uid = data.get("uid", "").strip()
                 if uid:
                     ok, msg = update_person(conn, uid, fio, company, title, numbers)
@@ -910,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(400, render_form(
                         {"uid": uid, "fio": fio, "company": company,
-                         "title": title, "numbers": numbers}, user,
+                         "title": title, **numbers}, user,
                         f"Каталог отклонил изменение: {msg}"))
             elif path == "/delete":
                 uid = data.get("uid", "").strip()

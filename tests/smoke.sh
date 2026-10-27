@@ -79,11 +79,21 @@ section "Create, export, delete"
 check "create a contact"              303 "$(code -u "${ADMIN_USER}:${ADMIN_PW}" -X POST \
         --data-urlencode "uid=" --data-urlencode "fio=Smoke Test" \
         --data-urlencode "company=Test Org" --data-urlencode "title=Tester" \
-        --data-urlencode $'numbers=1000\n+7 000 000-00-00' "${PB_URL}/save")"
+        --data-urlencode "work=1000" --data-urlencode "mobile=+7 000 000-00-00" \
+        --data-urlencode "other=+7 111 111-11-11" "${PB_URL}/save")"
 
 FOUND="$(ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H "${LDAP_URI}" \
         -b "${PEOPLE_DN}" "(cn=Smoke Test)" uid 2>/dev/null | grep -c '^uid:')"
 check "contact exists in LDAP"        1 "${FOUND}"
+
+# the phones show one number per attribute, so each attribute must hold one value
+count_attr() {
+    ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H "${LDAP_URI}" \
+        -b "${PEOPLE_DN}" "(cn=Smoke Test)" "$1" 2>/dev/null | grep -c "^$1:"
+}
+check "telephoneNumber single value"  1 "$(count_attr telephoneNumber)"
+check "mobile single value"           1 "$(count_attr mobile)"
+check "homePhone single value"        1 "$(count_attr homePhone)"
 
 # with at least one contact the page must render a real table
 LIST="$(curl -sS -m 15 -u "${ADMIN_USER}:${ADMIN_PW}" "${PB_URL}/" 2>/dev/null)"
@@ -94,7 +104,8 @@ esac
 
 EXPORT="$(curl -sS -m 15 -u "${ADMIN_USER}:${ADMIN_PW}" "${PB_URL}/export.csv" 2>/dev/null)"
 case "${EXPORT}" in
-    *Предприятие\;Должность\;ФИО\;Телефоны*) printf '  %sPASS%s export CSV header\n' "${C_GREEN}" "${C_RESET}"; PASS=$((PASS + 1)) ;;
+    *Предприятие\;Должность\;ФИО\;Телефон\;Мобильный\;Другой*)
+        printf '  %sPASS%s export CSV header\n' "${C_GREEN}" "${C_RESET}"; PASS=$((PASS + 1)) ;;
     *) printf '  %sFAIL%s export CSV header\n' "${C_RED}" "${C_RESET}"; FAIL=$((FAIL + 1)) ;;
 esac
 case "${EXPORT}" in

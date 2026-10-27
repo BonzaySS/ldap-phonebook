@@ -92,12 +92,14 @@ NUMBER_PREFIXES = (
     ("work", "telephoneNumber"),
     ("phone", "telephoneNumber"),
     ("tel", "telephoneNumber"),
+    ("\u0442\u0435\u043b\u0435\u0444\u043e\u043d", "telephoneNumber"),
     ("\u0440\u0430\u0431\u043e\u0447", "telephoneNumber"),
     ("mobile", "mobile"),
     ("mob", "mobile"),
     ("\u043c\u043e\u0431", "mobile"),
     ("home", "homePhone"),
     ("\u0434\u043e\u043c", "homePhone"),
+    ("\u0434\u0440\u0443\u0433", "homePhone"),
     ("fax", "facsimileTelephoneNumber"),
 )
 
@@ -226,7 +228,24 @@ def build_records(rows, base, people, skip_existing: set[str]):
                 continue
             attr = number_attr(col)
             if attr:
-                numbers.setdefault(attr, []).append(norm_name(val))
+                # a cell may hold a list: "101, +7 495 ..." (legacy "телефоны")
+                for part in re.split(r"[\n,;]+", val):
+                    value = norm_name(part)
+                    if value:
+                        numbers.setdefault(attr, []).append(value)
+
+        # the phones show one number per attribute, so the three slots are kept
+        # single-valued: telephoneNumber / mobile / homePhone, extras overflow
+        slots = {"telephoneNumber": "", "mobile": "", "homePhone": ""}
+        spare: list[str] = []
+        for attr in slots:
+            values = [v for v in dict.fromkeys(numbers.get(attr, [])) if v]
+            if values:
+                slots[attr] = values[0]
+                spare += values[1:]
+        for attr in ("telephoneNumber", "mobile", "homePhone"):
+            if not slots[attr] and spare:
+                slots[attr] = spare.pop(0)
 
         attrs: list[tuple[str, str]] = [("uid", uid), ("cn", fio), ("sn", sn)]
         if given:
@@ -240,12 +259,12 @@ def build_records(rows, base, people, skip_existing: set[str]):
             attrs.append(("title", norm_name(cols["title"])))
         if cols.get("company"):
             attrs.append(("o", norm_name(cols["company"])))
-        for attr, values in numbers.items():
-            seen: set[str] = set()
-            for v in values:
-                if v and v not in seen:
-                    seen.add(v)
-                    attrs.append((attr, v))
+        for attr, value in slots.items():
+            if value:
+                attrs.append((attr, value))
+        for value in dict.fromkeys(numbers.get("facsimileTelephoneNumber", [])):
+            if value:
+                attrs.append(("facsimileTelephoneNumber", value))
 
         dn = f"uid={uid},{people_dn}"
         extra = " ".join(
