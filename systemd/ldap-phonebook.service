@@ -1,0 +1,26 @@
+[Unit]
+Description=ldap-phonebook — phone book web UI for SIP phones
+Documentation=https://github.com/OWNER/ldap-phonebook
+After=network-online.target slapd.service
+Wants=network-online.target
+Requires=slapd.service
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=@ENV_FILE@
+ExecStart=@APP_DIR@/.venv/bin/python @APP_DIR@/app.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

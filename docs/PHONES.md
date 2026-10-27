@@ -1,0 +1,219 @@
+# Настройка телефонов
+
+## Главное: телефон не хранит копию справочника
+
+Телефон каждый раз, когда вы открываете телефонную книгу или набираете номер,
+делает запрос к LDAP-серверу. Никакой синхронизации нет.
+
+Отсюда простые следствия:
+
+* добавили человека в веб-интерфейсе → он **сразу** виден на телефоне,
+  перезагружать аппарат не нужно;
+* исправили номер → на телефоне уже правильный;
+* удалили запись → она пропала из поиска;
+* источник данных один, расхождений между вебом и трубкой не бывает.
+
+Поэтому «вносить данные в телефоны» не требуется вообще: данные вносятся один
+раз в веб-интерфейс, а в телефоне настраивается только **доступ** к справочнику —
+один раз, при установке.
+
+## Что нужно один раз указать в телефоне
+
+Ниже `<SERVER>` — адрес сервера с телефонной книгой, `<BASE_DN>` — база каталога
+(например `dc=acme,dc=ru`), `<READ_USER>` / `<READ_PW>` — учётная запись только
+для чтения из `/root/ldap-phonebook-credentials.txt`.
+
+| Параметр | Значение |
+|---|---|
+| Адрес сервера | `<SERVER>` |
+| Порт | `389` |
+| Шифрование | без TLS (`LDAP`) |
+| База поиска | `ou=people,<BASE_DN>` |
+| Логин (Bind DN) | `cn=<READ_USER>,<BASE_DN>` |
+| Пароль | `<READ_PW>` |
+| Фильтр по имени | `(\|(cn=%)(sn=%))` |
+| Фильтр по номеру | `(\|(telephoneNumber=%)(homePhone=%)(mobile=%))` |
+| Какие поля считать именем | `cn sn displayName` |
+| Какие поля считать номерами | `telephoneNumber mobile homePhone` |
+| Как показывать имя | `%cn` |
+
+> Каталог **не отдаёт данные анонимно**. Если не заполнить логин и пароль,
+> телефон покажет пустой список, а в журнале сервера будет `No such object`.
+> Это самая частая причина «LDAP не работает».
+
+## Yealink: пошагово
+
+1. **Узнать IP телефона.** На самом телефоне: `Menu` → `Status` → `Network`
+   (на части моделей `OK` → `Status`). Либо посмотреть в DHCP-сервере.
+2. **Открыть веб-интерфейс**: `http://<IP-телефона>`. Логин по умолчанию
+   `admin`, пароль `admin` (если не меняли).
+3. Перейти в **Directory → LDAP**.
+   На разных прошивках путь отличается: `Directory → Setting → LDAP`,
+   `Contacts → LDAP`, на T2x — `Directory → LDAP`.
+4. Включить `Enable LDAP`.
+5. Заполнить поля:
+
+   | Поле в телефоне | Значение |
+   |---|---|
+   | LDAP Label | `Телефонная книга` |
+   | Server Address | `<SERVER>` |
+   | Port | `389` |
+   | LDAP TLS Mode | `LDAP` |
+   | Base | `ou=people,<BASE_DN>` |
+   | Username | `cn=<READ_USER>,<BASE_DN>` |
+   | Password | `<READ_PW>` |
+   | Protocol | `3` |
+   | Max Hits | `50` |
+   | LDAP Name Filter | `(\|(cn=%)(sn=%))` |
+   | LDAP Number Filter | `(\|(telephoneNumber=%)(homePhone=%)(mobile=%))` |
+   | LDAP Name Attributes | `cn sn displayName` |
+   | LDAP Number Attributes | `telephoneNumber mobile homePhone` |
+   | LDAP Display Name | `%cn` |
+   | LDAP Lookup for Incoming Call | `Enabled` |
+   | LDAP Lookup for Callout | `Enabled` |
+   | LDAP Sorting Results | `Enabled` |
+
+6. Нажать `Confirm` / `Save`.
+7. **Проверить**: кнопка `Directory` → раздел `Телефонная книга` (`LDAP`) →
+   `Search` → набрать номер из справочника.
+
+Мелочи, которые заметно улучшают жизнь:
+
+* `LDAP Display Name` = `%displayName` — на экране короткое «Иванов И.И.»
+  вместо полного ФИО (поле заполняется автоматически).
+* `LDAP Number Attributes` дополняется через пробел: если хочется видеть в
+  карточке контакта ещё и отдел, допишите `departmentNumber` — Yealink сам
+  советует так делать в своей документации.
+
+## Fanvil: пошагово
+
+1. **Узнать IP** телефона: `Menu` → `Status` → `Network`.
+2. **Веб-интерфейс**: `http://<IP-телефона>`, логин `admin`, пароль `admin`
+   (новые прошивки требуют задать свой пароль при первом входе).
+3. Открыть **Phonebook → Cloud Phonebook → LDAP Settings**
+   (на старых прошивках: `Phone Book → LDAP`).
+4. Выбрать `LDAP 1` (у Fanvil четыре независимых профиля).
+5. Заполнить:
+
+   | Поле в телефоне | Значение |
+   |---|---|
+   | Display Title | `Телефонная книга` |
+   | Version | `Version 3` |
+   | Server Address | `<SERVER>` |
+   | Server Port | `389` |
+   | LDAP TLS Mode | `LDAP` |
+   | Authentication | `Simple` |
+   | Calling Line / Search Line | `AUTO` |
+   | Username | `cn=<READ_USER>,<BASE_DN>` |
+   | Password | `<READ_PW>` |
+   | Search Base | `ou=people,<BASE_DN>` |
+   | Max Hits | `50` |
+   | Telephone | `telephoneNumber` |
+   | Mobile | `mobile` |
+   | Other | `homePhone` |
+   | Name Attr | `cn sn ou` |
+   | Sort Attr | `cn` |
+   | Display name | `cn` |
+   | Name Filter | `(\|(cn=%)(sn=%))` |
+   | Number Filter | `(\|(telephoneNumber=%)(mobile=%)(homePhone=%))` |
+   | Enable in Call Search | `Enabled` |
+   | Enable Out Call Search | `Enabled` |
+
+6. `Save` / `Apply`.
+7. **Кнопка быстрого доступа** (по желанию): `Function Key` → выбрать DSS-клавишу
+   → тип `Key Event` → подтип `LDAP Group`.
+8. **Проверить**: нажать клавишу LDAP → `Search` → набрать номер.
+
+> У некоторых моделей Fanvil поле называется не `Other`, а `Home`; смысл тот
+> же — третий атрибут с номером. Если такого поля нет, оставьте фильтр из двух
+> атрибутов: `(|(telephoneNumber=%)(mobile=%))`.
+
+## Как проверить, что всё сходится
+
+Самый быстрый способ — с сервера, без телефона:
+
+```bash
+ldapsearch -x -D "cn=book,<BASE_DN>" -w '<READ_PW>' \
+  -H ldap://<SERVER>:389 -b "ou=people,<BASE_DN>" \
+  "(telephoneNumber=100)" cn telephoneNumber
+```
+
+Если эта команда находит человека, а телефон нет — проблема в настройках
+телефона, а не в справочнике.
+
+Ещё две проверки:
+
+```bash
+# анонимно читать нельзя — так и должно быть
+ldapsearch -x -H ldap://<SERVER>:389 -b "ou=people,<BASE_DN>" "(objectClass=*)" cn
+
+# учётная запись телефона работает
+ldapwhoami -x -D "cn=book,<BASE_DN>" -w '<READ_PW>' -H ldap://<SERVER>:389
+```
+
+## Если телефонов много: автопровижининг
+
+Настраивать десятки аппаратов руками не нужно — параметры раздаются файлом
+конфигурации.
+
+**Yealink.** В шаблоне конфигурации (файл `y0000000000xx.cfg` на TFTP/HTTP,
+телефон забирает его по адресу из DHCP option 66) достаточно блока:
+
+```ini
+ldap.enable = 1
+ldap.server = <SERVER>
+ldap.port = 389
+ldap.base = ou=people,<BASE_DN>
+ldap.user = cn=<READ_USER>,<BASE_DN>
+ldap.password = <READ_PW>
+ldap.version = 3
+ldap.max_hits = 50
+ldap.name_filter = (|(cn=%)(sn=%))
+ldap.number_filter = (|(telephoneNumber=%)(homePhone=%)(mobile=%))
+ldap.name_attr = cn sn displayName
+ldap.number_attr = telephoneNumber mobile homePhone
+ldap.display_name = %cn
+ldap.call_in_lookup = 1
+ldap.call_out_lookup = 1
+ldap.sort_results = 1
+```
+
+Имена параметров — из руководства администратора Yealink. На вашей прошивке
+проще всего убедиться так: настроить один аппарат руками, затем на нём
+`Settings → Configuration → Export` и посмотреть, как эти же значения выглядят
+в выгруженном файле.
+
+**Fanvil.** Схема та же (автопровижининг по option 66), но имена параметров
+сильно зависят от модели и прошивки. Надёжный путь: настроить один аппарат
+вручную, выгрузить его конфигурацию и размножить полученный блок.
+
+## Если не работает: чек-лист
+
+| Симптом | Причина | Что делать |
+|---|---|---|
+| Пустой список, «нет результатов» | не задан логин/пароль | заполнить `cn=<READ_USER>,<BASE_DN>` и пароль: анонимно каталог закрыт |
+| Совсем нет связи | телефон не видит сервер | проверить сеть/VLAN и что порт 389 открыт: `ss -ltn \| grep 389` на сервере |
+| Видны имена, но нет номеров | в списке числовых атрибутов нет нужного поля | добавить `telephoneNumber` (Yealink — `LDAP Number Attributes`, Fanvil — `Telephone`) |
+| В списке появилась запись с именем учётной записи | база поиска — весь каталог | поставить `Search Base` = `ou=people,<BASE_DN>` |
+| Поиск по номеру не находит | в фильтре номера нет `telephoneNumber` | проверить `Number Filter` |
+| Вместо русских букв — кракозябры | прошивка не понимает UTF-8 | обновить прошивку; если не помогает — перейти на латинские имена |
+| Поиск по имени с клавиатуры пуст | в языке телефона нет русской раскладки | включить русский язык или хранить имена латиницей |
+| Найдено меньше, чем ожидалось | `Max Hits` | поднять до 100 |
+
+Диагностика на сервере — видно ли вообще подключение телефона:
+
+```bash
+journalctl -u slapd -n 50 --no-pager | grep -i 'conn='
+```
+
+Если строк нет — телефон не доходит до сервера (сеть, порт, опечатка в адресе).
+Если строки есть, но запросы «пустые» — вопрос в фильтрах или в правах.
+
+## Если прошивка слишком старая и LDAP не умеет
+
+Тогда остаётся залить файл контактов в память телефона:
+Yealink — `Directory → Local Directory → Import`, Fanvil — `Phonebook → Local → Import`.
+Формат (XML или CSV) зависит от модели, его можно взять из `Export` того же
+меню. Минус очевиден: это копия, она устареет в тот же день, когда кто-то
+поменяет номер. Данные для такого файла можно взять из кнопки `Экспорт` в
+веб-интерфейсе.

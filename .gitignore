@@ -1,0 +1,24 @@
+# build output
+dist/
+*.tar.gz
+*.sha256
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# credentials and local configuration must never be committed
+*.pw
+*credentials*.txt
+.env
+ldap-phonebook.env
+admin.pw
+
+# editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp

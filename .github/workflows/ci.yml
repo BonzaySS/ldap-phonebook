@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: syntax and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash syntax
+        run: bash -n install.sh uninstall.sh tests/smoke.sh packaging/build-dist.sh
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=error install.sh uninstall.sh tests/smoke.sh packaging/build-dist.sh
+
+      - name: python syntax
+        run: python3 -m py_compile app/app.py app/import_phonebook.py
+
+      - name: build tarball
+        run: bash packaging/build-dist.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*.tar.gz*
+
+  install-test:
+    name: install on a clean Ubuntu and run the smoke test
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install
+        run: |
+          sudo ./install.sh --yes \
+            --base-dn dc=ci,dc=local --domain ci.local \
+            --admin-password 'AdminPass123' \
+            --read-password 'ReadPass123' \
+            --port 8500 --no-firewall
+
+      - name: smoke test
+        env:
+          PB_ADMIN_PW: AdminPass123
+          PB_READ_PW: ReadPass123
+          PB_BASE_DN: dc=ci,dc=local
+          PB_PEOPLE_DN: ou=people,dc=ci,dc=local
+          PB_URL: http://127.0.0.1:8500
+        run: sudo -E bash tests/smoke.sh
+
+      - name: import CSV
+        run: |
+          sudo PB_ADMIN_PW_FILE=/etc/ldap-phonebook/admin.pw \
+               PB_BASE_DN=dc=ci,dc=local \
+               /opt/ldap-phonebook/.venv/bin/python /opt/ldap-phonebook/import_phonebook.py \
+               --csv examples/phonebook-demo.csv
+
+      - name: collected entries
+        run: |
+          ldapsearch -LLL -x -D "cn=book,dc=ci,dc=local" -w 'ReadPass123' \
+            -H ldap://127.0.0.1:389 -b "ou=people,dc=ci,dc=local" \
+            "(objectClass=inetOrgPerson)" cn telephoneNumber | head -30
+
+      - name: service logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u ldap-phonebook -n 60 --no-pager || true
+          sudo journalctl -u slapd -n 60 --no-pager || true
+
+  release:
+    name: publish release tarball
+    runs-on: ubuntu-24.04
+    needs: [lint, install-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: bash packaging/build-dist.sh
+      - name: publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz*
+          generate_release_notes: true
