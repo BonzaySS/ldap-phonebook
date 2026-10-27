@@ -217,30 +217,12 @@ slapd_suffix() {
         | sed -n 's/^namingContexts: //p' | head -n1
 }
 
-setup_slapd() {
-    step "Configuring OpenLDAP"
-    local existing
-    existing="$(slapd_suffix || true)"
-
-    if [[ -n "${existing}" ]]; then
-        note "slapd is already configured, suffix: ${existing}"
-        if [[ "${existing}" != "${BASE_DN}" ]]; then
-            die "the existing directory uses '${existing}', this install targets '${BASE_DN}'.
-       pass --base-dn ${existing} to reuse it, or --app-only to attach only the web UI"
-        fi
-        [[ -n "${ADMIN_PW}" ]] || die "slapd already exists: pass --admin-password for ${ADMIN_DN}"
-        ok "existing directory reused"
-        return 0
-    fi
-
+preseed_slapd() {
     [[ -n "${ADMIN_PW}" ]] || ADMIN_PW="$(gen_password)"
-    say "creating a new directory: ${BASE_DN}"
-
     if [[ "${DRY_RUN}" == "yes" ]]; then
-        note "[dry-run] preseed debconf and install slapd for domain ${DOMAIN}"
+        note "[dry-run] would preseed debconf for domain ${DOMAIN}"
         return 0
     fi
-
     debconf-set-selections <<EOF
 slapd slapd/password1 password ${ADMIN_PW}
 slapd slapd/password2 password ${ADMIN_PW}
@@ -254,6 +236,44 @@ slapd slapd/move_old_database boolean true
 slapd slapd/allow_ldap_v2 boolean false
 slapd slapd/no_configuration boolean false
 EOF
+}
+
+setup_slapd() {
+    step "Configuring OpenLDAP"
+    local existing
+    existing="$(slapd_suffix || true)"
+
+    # a freshly installed slapd can configure itself from the machine domain
+    # before the preseed lands; reconfiguring is safe only right after install,
+    # because a directory that was already there may hold real data
+    if [[ -n "${existing}" && "${existing}" != "${BASE_DN}" && "${SLAPD_FRESH}" == "yes" ]]; then
+        warn "fresh slapd configured itself as '${existing}', re-running with domain ${DOMAIN}"
+        if [[ "${DRY_RUN}" != "yes" ]]; then
+            DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive slapd >/dev/null 2>&1 || true
+            systemctl restart slapd >/dev/null 2>&1 || true
+            sleep 2
+        fi
+        existing="$(slapd_suffix || true)"
+    fi
+
+    if [[ -n "${existing}" ]]; then
+        note "slapd is already configured, suffix: ${existing}"
+        if [[ "${existing}" != "${BASE_DN}" ]]; then
+            die "the existing directory uses '${existing}', this install targets '${BASE_DN}'.
+       pass --base-dn ${existing} to reuse it, or --app-only to attach only the web UI"
+        fi
+        [[ -n "${ADMIN_PW}" ]] || die "slapd already exists: pass --admin-password for ${ADMIN_DN}"
+        systemctl enable --now slapd >/dev/null 2>&1 || true
+        ok "existing directory reused"
+        return 0
+    fi
+
+    say "creating a new directory: ${BASE_DN}"
+    if [[ "${DRY_RUN}" == "yes" ]]; then
+        note "[dry-run] would configure slapd for ${DOMAIN}"
+        return 0
+    fi
+    preseed_slapd
     DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive slapd >/dev/null 2>&1 || true
     systemctl enable --now slapd >/dev/null 2>&1 || true
     sleep 1
@@ -618,6 +638,17 @@ summary() {
 
 # ------------------------------------------------------------------- main ---
 preflight
+
+# The preseed must be in place BEFORE slapd is installed, otherwise Debian
+# creates the directory from the machine's domain (this is what CI caught).
+SLAPD_FRESH="no"
+if [[ "${APP_ONLY}" != "yes" ]] && ! dpkg -s slapd >/dev/null 2>&1; then
+    SLAPD_FRESH="yes"
+    step "Preseeding OpenLDAP"
+    preseed_slapd
+    ok "debconf prepared: domain ${DOMAIN}, base ${BASE_DN}"
+fi
+
 install_packages
 
 if [[ "${APP_ONLY}" != "yes" ]]; then
