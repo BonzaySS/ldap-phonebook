@@ -63,7 +63,7 @@ DISPLAY_SEP = os.environ.get("PB_DISPLAY_SEP", "·")
 # the handset fits about this many characters per line; longer captions are
 # split into two lines (PB_DISPLAY_MULTILINE=false keeps one line)
 DISPLAY_MAX = int(os.environ.get("PB_DISPLAY_MAX", "35"))
-DISPLAY_MULTILINE = os.environ.get("PB_DISPLAY_MULTILINE", "true").lower() not in (
+DISPLAY_MULTILINE = os.environ.get("PB_DISPLAY_MULTILINE", "false").lower() not in (
     "0", "false", "no", "off")
 
 

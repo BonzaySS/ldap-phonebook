@@ -30,7 +30,7 @@ ATTRS = ["uid", "cn", "sn", "givenName", "displayName", "o", "title"]
 # the same knobs the web UI uses (см. app.py)
 DISPLAY_SEP = os.environ.get("PB_DISPLAY_SEP", "·")
 DISPLAY_MAX = int(os.environ.get("PB_DISPLAY_MAX", "35"))
-DISPLAY_MULTILINE = os.environ.get("PB_DISPLAY_MULTILINE", "true").lower() not in (
+DISPLAY_MULTILINE = os.environ.get("PB_DISPLAY_MULTILINE", "false").lower() not in (
     "0", "false", "no", "off")
 DISPLAY_NL = os.environ.get("PB_DISPLAY_NL", "\\n").replace("\\r", "\r").replace("\\n", "\n")
 

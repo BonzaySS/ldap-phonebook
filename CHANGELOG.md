@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 versions follow [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.2.3] — 2026-10-27
+
+### Изменено
+
+- По умолчанию подпись для телефона собирается **в одну строку**:
+  `Энерком · Инженер · Чирcкий С.` Перенос на две строки теперь нужно включать
+  явно (`PB_DISPLAY_MULTILINE=true`) — не все прошивки его показывают.
+
 ## [1.2.2] — 2026-10-27
 
 ### Добавлено
