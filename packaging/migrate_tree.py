@@ -29,13 +29,13 @@ ATTRS = ["uid", "cn", "sn", "givenName", "displayName", "o", "title"]
 
 
 def display_caption(cn: str, title: str, company: str) -> str:
-    parts = [p for p in (title, company) if p]
-    short = cn
+    """«Энерком · Инженер · Чирcкий С.» — так же, как в веб-интерфейсе."""
     words = cn.split()
+    short = cn
     if len(words) > 1:
         short = f"{words[0]} " + "".join(w[0].upper() + "." for w in words[1:])
-    extra = ", ".join(parts)
-    return f"{short} — {extra}" if short and extra else (short or extra)
+    parts = [p for p in (company, title, short) if p]
+    return " · ".join(parts)
 
 
 def main() -> int:

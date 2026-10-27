@@ -57,6 +57,9 @@ SESSION_TTL = int(os.environ.get("PB_SESSION_TTL", str(12 * 3600)))
 COOKIE = "pb_sid"
 TITLE = os.environ.get("PB_TITLE", "Телефонная книга")
 SUBTITLE = os.environ.get("PB_SUBTITLE", "")
+# caption written to displayName: o=организация, t=должность, n=короткое ФИО, c=полное
+DISPLAY_ORDER = os.environ.get("PB_DISPLAY_ORDER", "o,t,n")
+DISPLAY_SEP = os.environ.get("PB_DISPLAY_SEP", "·")
 
 # ------------------------------------------------------------------ translit
 _TRANSLIT = {
@@ -143,16 +146,19 @@ def connect(user: str, password: str) -> Connection | None:
         return None
 
 
-def compose_display(short: str, title: str, company: str) -> str:
-    """Caption for the phone screen: name first, then title and organisation.
+def compose_display(short: str, title: str, company: str, full: str = "") -> str:
+    """Caption for the phone screen.
 
     Fanvil shows a single LDAP attribute as the contact caption, so everything
-    that has to be visible on the handset goes into displayName.
+    that has to be visible on the handset goes into displayName. The order and
+    the separator come from PB_DISPLAY_ORDER / PB_DISPLAY_SEP:
+        o = организация, t = должность, n = короткое ФИО, c = полное ФИО
+    Default: "Энерком · Инженер · Чирcкий С."
     """
-    extra = ", ".join(part for part in (title, company) if part)
-    if short and extra:
-        return f"{short} — {extra}"
-    return short or extra
+    values = {"o": company, "t": title, "n": short, "c": full}
+    parts = [values.get(key.strip(), "") for key in DISPLAY_ORDER.split(",")]
+    parts = [part for part in parts if part]
+    return f" {DISPLAY_SEP} ".join(parts)
 
 
 def org_container(conn: Connection, company: str) -> str:
@@ -244,7 +250,7 @@ def add_person(conn: Connection, fio: str, company: str, title: str,
     attrs = {"cn": fio, "sn": sn}
     if given:
         attrs["givenName"] = given
-    caption = compose_display(short, title, company)
+    caption = compose_display(short, title, company, fio)
     if caption:
         attrs["displayName"] = caption
     if company:
@@ -283,7 +289,7 @@ def update_person(conn: Connection, uid: str, fio: str, company: str,
     put("cn", fio)
     put("sn", sn)
     put("givenName", given)
-    put("displayName", compose_display(short, title, company))
+    put("displayName", compose_display(short, title, company, fio))
     put("o", company)
     put("title", title)
 

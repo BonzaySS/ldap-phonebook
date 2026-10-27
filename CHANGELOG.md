@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 versions follow [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.2.1] — 2026-10-27
+
+### Изменено
+
+- Подпись для экрана телефона теперь в порядке «организация · должность · ФИО»:
+  `Энерком · Инженер · Чирcкий С.`
+- Порядок и разделитель настраиваются переменными `PB_DISPLAY_ORDER`
+  (`o`, `t`, `n`, `c`) и `PB_DISPLAY_SEP` — без правки кода.
+
 ## [1.2.0] — 2026-10-27
 
 ### Добавлено
