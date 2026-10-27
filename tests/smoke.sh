@@ -86,6 +86,16 @@ FOUND="$(ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H
         -b "${PEOPLE_DN}" "(cn=Smoke Test)" uid 2>/dev/null | grep -c '^uid:')"
 check "contact exists in LDAP"        1 "${FOUND}"
 
+# the contact must be filed under its organisation branch
+BRANCH="ou=Test Org,${PEOPLE_DN}"
+IN_BRANCH="$(ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H "${LDAP_URI}" \
+        -b "${BRANCH}" "(objectClass=inetOrgPerson)" uid 2>/dev/null | grep -c '^uid:')"
+check "filed under the organisation branch" 1 "${IN_BRANCH}"
+
+CAPTION="$(ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H "${LDAP_URI}" \
+        -b "${BRANCH}" "(cn=Smoke Test)" displayName 2>/dev/null | grep -cE '^displayName::? ')"
+check "caption for the phone is set"  1 "${CAPTION}"
+
 # the phones show one number per attribute, so each attribute must hold one value
 count_attr() {
     ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H "${LDAP_URI}" \

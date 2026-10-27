@@ -33,6 +33,8 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import ldap3
 from ldap3 import MODIFY_DELETE, MODIFY_REPLACE, Connection, Server
+from ldap3.utils.conv import escape_filter_chars
+from ldap3.utils.dn import escape_rdn
 
 # -------------------------------------------------------------------- config
 HOST = os.environ.get("PB_HOST", "0.0.0.0")
@@ -141,6 +143,42 @@ def connect(user: str, password: str) -> Connection | None:
         return None
 
 
+def compose_display(short: str, title: str, company: str) -> str:
+    """Caption for the phone screen: name first, then title and organisation.
+
+    Fanvil shows a single LDAP attribute as the contact caption, so everything
+    that has to be visible on the handset goes into displayName.
+    """
+    extra = ", ".join(part for part in (title, company) if part)
+    if short and extra:
+        return f"{short} — {extra}"
+    return short or extra
+
+
+def org_container(conn: Connection, company: str) -> str:
+    """DN of the organisation branch, created on demand.
+
+    Contacts live under ou=<organization>,ou=people,... so the directory is
+    browsable by organisation; contacts without one stay in ou=people itself.
+    """
+    if not company:
+        return PEOPLE_DN
+    dn = f"ou={escape_rdn(company)},{PEOPLE_DN}"
+    conn.search(dn, "(objectClass=*)", attributes=["ou"], size_limit=1)
+    if not conn.entries:
+        conn.add(dn, ["organizationalUnit"], {"ou": company})
+    return dn
+
+
+def find_dn(conn: Connection, uid: str) -> str:
+    """Real DN of a contact by uid (they are nested, so the uid is not enough)."""
+    if not uid:
+        return ""
+    conn.search(PEOPLE_DN, f"(uid={escape_filter_chars(uid)})",
+                attributes=["uid"], size_limit=1)
+    return conn.entries[0].entry_dn if conn.entries else ""
+
+
 def entry_numbers(clean: dict[str, list[str]]) -> dict[str, str]:
     """Map the three attributes onto the three form fields.
 
@@ -172,6 +210,7 @@ def fetch(conn: Connection) -> list[dict]:
         slots = entry_numbers(clean)
         numbers = [slots[key] for key in ("work", "mobile", "other") if slots[key]]
         people.append({
+            "dn": entry.entry_dn,
             "uid": (clean.get("uid") or [""])[0],
             "fio": (clean.get("cn") or [""])[0],
             "title": (clean.get("title") or [""])[0],
@@ -193,8 +232,8 @@ def existing_uids(conn: Connection) -> set[str]:
 
 
 def add_person(conn: Connection, fio: str, company: str, title: str,
-               numbers: list[str]) -> tuple[bool, str]:
-    sn, given, display = split_fio(fio)
+               numbers: dict[str, str]) -> tuple[bool, str]:
+    sn, given, short = split_fio(fio)
     taken = existing_uids(conn)
     base = translit(sn) or "user"
     initials = "".join(translit(p)[:1] for p in norm(fio).split(" ")[1:] if p)
@@ -205,8 +244,9 @@ def add_person(conn: Connection, fio: str, company: str, title: str,
     attrs = {"cn": fio, "sn": sn}
     if given:
         attrs["givenName"] = given
-    if display:
-        attrs["displayName"] = display
+    caption = compose_display(short, title, company)
+    if caption:
+        attrs["displayName"] = caption
     if company:
         attrs["o"] = company
     if title:
@@ -214,20 +254,23 @@ def add_person(conn: Connection, fio: str, company: str, title: str,
     for key, attr in NUMBER_FIELDS:
         if numbers.get(key):
             attrs[attr] = numbers[key]
-    ok = conn.add(f"uid={uid},{PEOPLE_DN}", ["inetOrgPerson"], attrs)
+    parent = org_container(conn, company)
+    ok = conn.add(f"uid={uid},{parent}", ["inetOrgPerson"], attrs)
     return ok, conn.result.get("description", "")
 
 
 def update_person(conn: Connection, uid: str, fio: str, company: str,
                   title: str, numbers: dict[str, str]) -> tuple[bool, str]:
-    dn = f"uid={uid},{PEOPLE_DN}"
+    dn = find_dn(conn, uid)
+    if not dn:
+        return False, "запись не найдена"
     conn.search(dn, "(objectClass=*)", attributes=READ_ATTRS, size_limit=1)
     if not conn.entries:
         return False, "запись не найдена"
     current = {k: [str(v) for v in vals]
                for k, vals in conn.entries[0].entry_attributes_as_dict.items()}
 
-    sn, given, display = split_fio(fio)
+    sn, given, short = split_fio(fio)
     changes: dict[str, list] = {}
 
     def put(attr: str, value: str) -> None:
@@ -240,7 +283,7 @@ def update_person(conn: Connection, uid: str, fio: str, company: str,
     put("cn", fio)
     put("sn", sn)
     put("givenName", given)
-    put("displayName", display)
+    put("displayName", compose_display(short, title, company))
     put("o", company)
     put("title", title)
 
@@ -257,14 +300,25 @@ def update_person(conn: Connection, uid: str, fio: str, company: str,
     for key in ("mobile", "other"):
         put(dict(NUMBER_FIELDS)[key], norm(numbers.get(key, "")))
 
-    if not changes:
-        return True, "no changes"
-    ok = conn.modify(dn, changes)
-    return ok, conn.result.get("description", "")
+    if changes:
+        ok = conn.modify(dn, changes)
+        if not ok:
+            return False, conn.result.get("description", "")
+
+    # a change of organisation moves the contact to the matching branch
+    parent = org_container(conn, company)
+    if dn.split(",", 1)[1] != parent:
+        moved = conn.modify_dn(dn, f"uid={uid}", new_superior=parent)
+        if not moved:
+            return False, conn.result.get("description", "")
+    return True, "no changes" if not changes else "success"
 
 
 def delete_person(conn: Connection, uid: str) -> tuple[bool, str]:
-    ok = conn.delete(f"uid={uid},{PEOPLE_DN}")
+    dn = find_dn(conn, uid)
+    if not dn:
+        return False, "запись не найдена"
+    ok = conn.delete(dn)
     return ok, conn.result.get("description", "")
 
 
@@ -446,8 +500,8 @@ main { max-width: 1120px; margin: 0 auto; padding: 26px 28px 60px; }
 
 /* ---------- table ---------- */
 .card {
-  background: #fff; border: 1px solid #e4e7ec; border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 6px 20px -12px rgba(16,24,40,.16);
+  background: #fff; border: 1px solid #98a2b3; border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 20px -12px rgba(16,24,40,.18);
   overflow: hidden;
 }
 table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; min-width: 660px; }
@@ -457,17 +511,23 @@ table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout:
 thead th:nth-child(1) { width: 19%; }
 thead th:nth-child(2) { width: 21%; }
 thead th:nth-child(3) { width: 24%; }
-thead th:nth-child(5) { width: 96px; }
+thead th:nth-child(5) { width: 92px; }
 thead th {
-  padding: 11px 18px; text-align: left; background: #fafbfc;
-  border-bottom: 1px solid #e4e7ec; font-size: 11.5px; font-weight: 650;
-  letter-spacing: .05em; text-transform: uppercase; color: #667085;
+  padding: 8px 12px; text-align: left; background: #f2f4f7;
+  border-bottom: 1px solid #98a2b3; font-size: 11px; font-weight: 650;
+  letter-spacing: .04em; text-transform: uppercase; color: #475467;
 }
-tbody td { padding: 13px 18px; border-bottom: 1px solid #f2f4f7; vertical-align: top; }
-thead th + th, tbody td + td { border-left: 1px solid #f2f4f7; }
+tbody td { padding: 8px 12px; border-bottom: 1px solid #d0d5dd; vertical-align: top; }
+thead th + th, tbody td + td { border-left: 1px solid #d0d5dd; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr { transition: background .12s; }
-tbody tr:hover { background: #fafbff; }
+tbody tr:hover { background: #f8faff; }
+tbody tr.group td {
+  background: #eef2f7; border-bottom: 1px solid #98a2b3; border-left: 0;
+  padding: 6px 12px; font-size: 12px; font-weight: 650; color: #344054;
+  letter-spacing: .01em;
+}
+tbody tr.group:hover td { background: #eef2f7; }
 td.fio { font-weight: 600; color: #101828; }
 td.muted, .muted { color: #98a2b3; }
 td.actions { text-align: right; white-space: nowrap; }
@@ -491,9 +551,9 @@ form.inline { display: inline; }
 
 /* ---------- forms ---------- */
 .panel {
-  background: #fff; border: 1px solid #e4e7ec; border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 6px 20px -12px rgba(16,24,40,.16);
-  padding: 26px; max-width: 660px; margin: 8px auto 0;
+  background: #fff; border: 1px solid #cbd5e1; border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 20px -12px rgba(16,24,40,.18);
+  padding: 24px; max-width: 660px; margin: 8px auto 0;
 }
 .field label.filebox {
   position: relative; display: flex; flex-direction: column; align-items: center;
@@ -654,12 +714,18 @@ def render_login(error: str = "") -> bytes:
 def render_list(people: list[dict], user: str, message: str = "",
                 kind: str = "ok") -> bytes:
     rows = []
+    current_group = None
     for p in people:
         chips = "".join(
             f'<span class="chip" title="{esc(NUMBER_LABELS[key])}">{esc(p[key])}</span>'
             for key in ("work", "mobile", "other") if p.get(key)
         ) or '<span class="muted">—</span>'
         label = esc(" ".join([p['company'], p['title'], p['fio'], " ".join(p['numbers'])]).lower())
+        # the directory is a tree by organisation, so the list is grouped the same way
+        if p["company"] != current_group:
+            current_group = p["company"]
+            title = esc(current_group) if current_group else "Без организации"
+            rows.append(f'<tr class="group"><td colspan="5">{title}</td></tr>')
         rows.append(f"""<tr data-search="{label}">
 <td data-label="Предприятие">{esc(p['company']) or '<span class="muted">—</span>'}</td>
 <td data-label="Должность">{esc(p['title']) or '<span class="muted">—</span>'}</td>
@@ -700,12 +766,19 @@ def render_list(people: list[dict], user: str, message: str = "",
 const q = document.getElementById('q'), count = document.getElementById('count');
 function applyFilter() {{
   const needle = q.value.trim().toLowerCase();
-  let shown = 0;
+  let shown = 0, header = null, headerHit = false;
+  const flush = () => {{ if (header) header.style.display = headerHit ? '' : 'none'; }};
   document.querySelectorAll('#tbl tbody tr').forEach(tr => {{
-    const hit = !needle || tr.dataset.search.includes(needle);
+    if (tr.classList.contains('group')) {{
+      flush();
+      header = tr; headerHit = false;
+      return;
+    }}
+    const hit = !needle || (tr.dataset.search || '').includes(needle);
     tr.style.display = hit ? '' : 'none';
-    if (hit) shown++;
+    if (hit) {{ shown++; headerHit = true; }}
   }});
+  flush();
   count.textContent = needle ? `найдено: ${{shown}}` : `всего: ${{shown}}`;
 }}
 q.addEventListener('input', applyFilter);
