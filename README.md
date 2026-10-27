@@ -28,7 +28,7 @@
 ## Быстрый старт
 
 ```bash
-curl -fsSLO https://github.com/YOUR_GITHUB_USER/ldap-phonebook/releases/latest/download/ldap-phonebook-1.0.0.tar.gz
+curl -fsSLO https://github.com/BonzaySS/ldap-phonebook/releases/latest/download/ldap-phonebook-1.0.0.tar.gz
 tar -xzf ldap-phonebook-1.0.0.tar.gz
 cd ldap-phonebook-1.0.0
 
