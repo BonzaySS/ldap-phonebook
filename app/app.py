@@ -58,7 +58,7 @@ COOKIE = "pb_sid"
 TITLE = os.environ.get("PB_TITLE", "Телефонная книга")
 SUBTITLE = os.environ.get("PB_SUBTITLE", "")
 # caption written to displayName: o=организация, t=должность, n=короткое ФИО, c=полное
-DISPLAY_ORDER = os.environ.get("PB_DISPLAY_ORDER", "o,t,n")
+DISPLAY_ORDER = os.environ.get("PB_DISPLAY_ORDER", "n,o,t")
 DISPLAY_SEP = os.environ.get("PB_DISPLAY_SEP", "·")
 # the handset fits about this many characters per line; longer captions are
 # split into two lines (PB_DISPLAY_MULTILINE=false keeps one line)

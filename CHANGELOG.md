@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 versions follow [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.2.4] — 2026-10-27
+
+### Изменено
+
+- Подпись для телефона собирается в порядке «ФИО · организация · должность»:
+  `Димедрол · Энерком · Менеджер по продажам`. ФИО в начале — чтобы при обрезке
+  по ширине экрана оставались имя и организация, а не хвост должности.
+
 ## [1.2.3] — 2026-10-27
 
 ### Изменено

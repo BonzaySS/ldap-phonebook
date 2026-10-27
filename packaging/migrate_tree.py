@@ -28,6 +28,7 @@ PW_FILE = os.environ.get("PB_ADMIN_PW_FILE", "/etc/ldap-phonebook/admin.pw")
 ATTRS = ["uid", "cn", "sn", "givenName", "displayName", "o", "title"]
 
 # the same knobs the web UI uses (см. app.py)
+DISPLAY_ORDER = os.environ.get("PB_DISPLAY_ORDER", "n,o,t")
 DISPLAY_SEP = os.environ.get("PB_DISPLAY_SEP", "·")
 DISPLAY_MAX = int(os.environ.get("PB_DISPLAY_MAX", "35"))
 DISPLAY_MULTILINE = os.environ.get("PB_DISPLAY_MULTILINE", "false").lower() not in (
@@ -50,12 +51,18 @@ def wrap_caption(text: str) -> str:
 
 
 def display_caption(cn: str, title: str, company: str) -> str:
-    """«Энерком · Инженер · Чирcкий С.» — так же, как в веб-интерфейсе."""
+    """«Димедрол · Энерком · Менеджер по продажам» — как в веб-интерфейсе.
+
+    Порядок частей задаётся PB_DISPLAY_ORDER: n = короткое ФИО, c = полное,
+    o = организация, t = должность.
+    """
     words = cn.split()
     short = cn
     if len(words) > 1:
         short = f"{words[0]} " + "".join(w[0].upper() + "." for w in words[1:])
-    parts = [p for p in (company, title, short) if p]
+    values = {"n": short, "c": cn, "o": company, "t": title}
+    parts = [values.get(key.strip(), "") for key in DISPLAY_ORDER.split(",")]
+    parts = [p for p in parts if p]
     return wrap_caption(f" {DISPLAY_SEP} ".join(parts))
 
 
