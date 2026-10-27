@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 versions follow [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.2.2] — 2026-10-27
+
+### Добавлено
+
+- Длинная подпись для экрана телефона переносится на вторую строку по границе
+  разделителя — в экран влезает около 35 символов, слова не режутся.
+- Настройки подписи: `PB_DISPLAY_MAX` (ширина строки, по умолчанию 35),
+  `PB_DISPLAY_MULTILINE` (выключить перенос) и `PB_DISPLAY_NL` (символ переноса:
+  `\n`, `\r\n`, пробел или пусто — если телефон не понимает перевод строки).
+
 ## [1.2.1] — 2026-10-27
 
 ### Изменено

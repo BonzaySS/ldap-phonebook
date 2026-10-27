@@ -60,6 +60,19 @@ SUBTITLE = os.environ.get("PB_SUBTITLE", "")
 # caption written to displayName: o=организация, t=должность, n=короткое ФИО, c=полное
 DISPLAY_ORDER = os.environ.get("PB_DISPLAY_ORDER", "o,t,n")
 DISPLAY_SEP = os.environ.get("PB_DISPLAY_SEP", "·")
+# the handset fits about this many characters per line; longer captions are
+# split into two lines (PB_DISPLAY_MULTILINE=false keeps one line)
+DISPLAY_MAX = int(os.environ.get("PB_DISPLAY_MAX", "35"))
+DISPLAY_MULTILINE = os.environ.get("PB_DISPLAY_MULTILINE", "true").lower() not in (
+    "0", "false", "no", "off")
+
+
+def _decode_newline(raw: str) -> str:
+    """"\\n" / "\\r\\n" / " " / "" -> the actual characters used for the break."""
+    return raw.replace("\\r", "\r").replace("\\n", "\n")
+
+
+DISPLAY_NL = _decode_newline(os.environ.get("PB_DISPLAY_NL", "\\n"))
 
 # ------------------------------------------------------------------ translit
 _TRANSLIT = {
@@ -146,6 +159,25 @@ def connect(user: str, password: str) -> Connection | None:
         return None
 
 
+def wrap_caption(text: str) -> str:
+    """Break a long caption into two lines at a separator boundary.
+
+    The handset fits about PB_DISPLAY_MAX characters per line, so the caption is
+    split where a separator falls inside that width — words are never cut.
+    Set PB_DISPLAY_MULTILINE=false to keep a single line (the phone truncates).
+    """
+    if not DISPLAY_MULTILINE or len(text) <= DISPLAY_MAX:
+        return text
+    sep = f" {DISPLAY_SEP} "
+    cut = text.rfind(sep, 0, DISPLAY_MAX + 1)
+    if cut > 0:
+        return text[:cut] + DISPLAY_NL + text[cut + len(sep):]
+    cut = text.rfind(" ", 0, DISPLAY_MAX + 1)
+    if cut > 0:
+        return text[:cut] + DISPLAY_NL + text[cut + 1:]
+    return text
+
+
 def compose_display(short: str, title: str, company: str, full: str = "") -> str:
     """Caption for the phone screen.
 
@@ -153,12 +185,13 @@ def compose_display(short: str, title: str, company: str, full: str = "") -> str
     that has to be visible on the handset goes into displayName. The order and
     the separator come from PB_DISPLAY_ORDER / PB_DISPLAY_SEP:
         o = организация, t = должность, n = короткое ФИО, c = полное ФИО
-    Default: "Энерком · Инженер · Чирcкий С."
+    Default: "Энерком · Инженер · Чирcкий С.", длинное переносится на вторую
+    строку по границе разделителя.
     """
     values = {"o": company, "t": title, "n": short, "c": full}
     parts = [values.get(key.strip(), "") for key in DISPLAY_ORDER.split(",")]
     parts = [part for part in parts if part]
-    return f" {DISPLAY_SEP} ".join(parts)
+    return wrap_caption(f" {DISPLAY_SEP} ".join(parts))
 
 
 def org_container(conn: Connection, company: str) -> str:
