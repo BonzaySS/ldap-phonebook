@@ -67,10 +67,12 @@ check "admin login succeeds"          303 "$(code -c "${JAR}" -X POST \
         -d "username=${ADMIN_USER}&password=${ADMIN_PW}" "${PB_URL}/login")"
 check "list page with session"        200 "$(code -b "${JAR}" "${PB_URL}/")"
 
-if grep -q '<table id="tbl">' "${TMP}"; then
-    printf '  %sPASS%s list page contains a table\n' "${C_GREEN}" "${C_RESET}"; PASS=$((PASS + 1))
+# the list page always carries the search box; the table itself only appears
+# when the phone book is not empty (an empty book renders a placeholder)
+if grep -q 'id="q"' "${TMP}"; then
+    printf '  %sPASS%s list page rendered\n' "${C_GREEN}" "${C_RESET}"; PASS=$((PASS + 1))
 else
-    printf '  %sFAIL%s list page has no table\n' "${C_RED}" "${C_RESET}"; FAIL=$((FAIL + 1))
+    printf '  %sFAIL%s list page did not render\n' "${C_RED}" "${C_RESET}"; FAIL=$((FAIL + 1))
 fi
 
 section "Create, export, delete"
@@ -82,6 +84,13 @@ check "create a contact"              303 "$(code -u "${ADMIN_USER}:${ADMIN_PW}"
 FOUND="$(ldapsearch -LLL -x -D "cn=${ADMIN_USER},${BASE_DN}" -w "${ADMIN_PW}" -H "${LDAP_URI}" \
         -b "${PEOPLE_DN}" "(cn=Smoke Test)" uid 2>/dev/null | grep -c '^uid:')"
 check "contact exists in LDAP"        1 "${FOUND}"
+
+# with at least one contact the page must render a real table
+LIST="$(curl -sS -m 15 -u "${ADMIN_USER}:${ADMIN_PW}" "${PB_URL}/" 2>/dev/null)"
+case "${LIST}" in
+    *'<table id="tbl">'*) printf '  %sPASS%s table rendered with a contact\n' "${C_GREEN}" "${C_RESET}"; PASS=$((PASS + 1)) ;;
+    *) printf '  %sFAIL%s table missing although a contact exists\n' "${C_RED}" "${C_RESET}"; FAIL=$((FAIL + 1)) ;;
+esac
 
 EXPORT="$(curl -sS -m 15 -u "${ADMIN_USER}:${ADMIN_PW}" "${PB_URL}/export.csv" 2>/dev/null)"
 case "${EXPORT}" in
